@@ -173,7 +173,9 @@ fn unpinned_base_images(dockerfile: &str) -> Vec<&str> {
         let resolved = image_ref
             .strip_prefix("${")
             .and_then(|name| name.strip_suffix('}'))
-            .map_or(image_ref, |name| args.get(name).copied().unwrap_or_default());
+            .map_or(image_ref, |name| {
+                args.get(name).copied().unwrap_or_default()
+            });
 
         if !stages.contains(image_ref) && !has_pinned_digest(resolved) {
             unpinned.push(image_ref);
