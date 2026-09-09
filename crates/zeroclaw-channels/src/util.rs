@@ -933,7 +933,10 @@ mod tests {
     /// always voiced and must stay that way.
     #[test]
     fn voice_reply_accepts_plain_prose() {
-        assert_eq!(voice_reply_skip_reason("Si apra il sipario, si accordi l'orchestra!"), None);
+        assert_eq!(
+            voice_reply_skip_reason("Si apra il sipario, si accordi l'orchestra!"),
+            None
+        );
     }
 
     /// The bracket clause still has to reject genuine machine output. An
@@ -941,18 +944,52 @@ mod tests {
     #[test]
     fn voice_reply_rejects_bracketed_machine_output() {
         for (content, expected) in [
-            ("[{\"a\":1},{\"b\":2}] ecco il meteo di oggi per Roma.", "json_array"),
-            ("[\"alpha\",\"beta\",\"gamma\",\"delta\",\"epsilon\"]", "json_array"),
-            ("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]", "json_array"),
-            ("[] plus filler text to clear the length floor here", "json_array"),
-            ("[IMAGE:/home/pi/chart.png] Ecco il grafico richiesto.", "attachment_marker"),
-            ("[VOICE:/tmp/zeroclaw/out.ogg] Nota vocale registrata.", "attachment_marker"),
-            ("[DOCUMENT:https://example.com/report.pdf] Ecco il file.", "attachment_marker"),
-            ("[Guida](https://example.com/docs) ecco il link utile.", "markdown_link"),
-            ("[unclosed tag and a sentence that never closes it", "unclosed_bracket"),
-            ("[didascalia molto lunga che sfora il limite dei tag] ok", "bracketed_prefix"),
+            (
+                "[{\"a\":1},{\"b\":2}] ecco il meteo di oggi per Roma.",
+                "json_array",
+            ),
+            (
+                "[\"alpha\",\"beta\",\"gamma\",\"delta\",\"epsilon\"]",
+                "json_array",
+            ),
+            (
+                "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]",
+                "json_array",
+            ),
+            (
+                "[] plus filler text to clear the length floor here",
+                "json_array",
+            ),
+            (
+                "[IMAGE:/home/pi/chart.png] Ecco il grafico richiesto.",
+                "attachment_marker",
+            ),
+            (
+                "[VOICE:/tmp/zeroclaw/out.ogg] Nota vocale registrata.",
+                "attachment_marker",
+            ),
+            (
+                "[DOCUMENT:https://example.com/report.pdf] Ecco il file.",
+                "attachment_marker",
+            ),
+            (
+                "[Guida](https://example.com/docs) ecco il link utile.",
+                "markdown_link",
+            ),
+            (
+                "[unclosed tag and a sentence that never closes it",
+                "unclosed_bracket",
+            ),
+            (
+                "[didascalia molto lunga che sfora il limite dei tag] ok",
+                "bracketed_prefix",
+            ),
         ] {
-            assert_eq!(voice_reply_skip_reason(content), Some(expected), "input: {content}");
+            assert_eq!(
+                voice_reply_skip_reason(content),
+                Some(expected),
+                "input: {content}"
+            );
         }
     }
 
@@ -960,14 +997,36 @@ mod tests {
     #[test]
     fn voice_reply_rejects_non_bracket_machine_output() {
         for (content, expected) in [
-            ("{\"ok\":true,\"result\":{\"message_id\":123456}}", "json_object"),
-            ("https://example.com/a/very/long/path/that/clears", "url_prefix"),
-            ("Error: the provider refused the request again.", "error_prefix"),
-            ("Ecco:\n```bash\nls -la\n``` e poi fammi sapere tutto.", "code_fence"),
-            ("Ho ricevuto un tool_call malformato, riprovo.", "tool_call_marker"),
-            ("Meteo da wttr.in: Roma 21 gradi, cielo sereno.", "weather_tool_output"),
+            (
+                "{\"ok\":true,\"result\":{\"message_id\":123456}}",
+                "json_object",
+            ),
+            (
+                "https://example.com/a/very/long/path/that/clears",
+                "url_prefix",
+            ),
+            (
+                "Error: the provider refused the request again.",
+                "error_prefix",
+            ),
+            (
+                "Ecco:\n```bash\nls -la\n``` e poi fammi sapere tutto.",
+                "code_fence",
+            ),
+            (
+                "Ho ricevuto un tool_call malformato, riprovo.",
+                "tool_call_marker",
+            ),
+            (
+                "Meteo da wttr.in: Roma 21 gradi, cielo sereno.",
+                "weather_tool_output",
+            ),
         ] {
-            assert_eq!(voice_reply_skip_reason(content), Some(expected), "input: {content}");
+            assert_eq!(
+                voice_reply_skip_reason(content),
+                Some(expected),
+                "input: {content}"
+            );
         }
     }
 
@@ -977,9 +1036,15 @@ mod tests {
     fn voice_reply_length_floor_is_measured_on_the_full_reply() {
         assert_eq!(voice_reply_skip_reason(&"x".repeat(41)), None);
         assert_eq!(voice_reply_skip_reason(&"x".repeat(40)), Some("too_short"));
-        assert_eq!(voice_reply_skip_reason(&format!("[whispers]{}", "x".repeat(31))), None);
+        assert_eq!(
+            voice_reply_skip_reason(&format!("[whispers]{}", "x".repeat(31))),
+            None
+        );
         assert_eq!(voice_reply_skip_reason("[laughs]"), Some("too_short"));
-        assert_eq!(voice_reply_skip_reason("[dramatic] Ciao!"), Some("too_short"));
+        assert_eq!(
+            voice_reply_skip_reason("[dramatic] Ciao!"),
+            Some("too_short")
+        );
     }
 
     /// Pins the classifier so a refactor that breaks tag recognition or the
@@ -987,7 +1052,10 @@ mod tests {
     #[test]
     fn leading_bracket_classifier_distinguishes_tags_from_markers() {
         assert_eq!(leading_bracket_skip_reason("[whispers] rest"), None);
-        assert_eq!(leading_bracket_skip_reason("[IMAGE:/x] rest"), Some("attachment_marker"));
+        assert_eq!(
+            leading_bracket_skip_reason("[IMAGE:/x] rest"),
+            Some("attachment_marker")
+        );
         assert_eq!(leading_bracket_skip_reason("no bracket here"), None);
     }
 
