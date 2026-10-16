@@ -11,22 +11,22 @@ pub mod tray;
 pub mod window;
 
 use gateway_client::GatewayClient;
-use state::shared_state;
+use state::{SplashStatus, shared_state};
 use tauri::{Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 /// Loopback port the desktop app expects the gateway/daemon on. Matches the
 /// port baked into [`state::AppState::default`]'s `gateway_url`.
 const GATEWAY_PORT: u16 = 42617;
 
-/// Status the splash listens for (`zeroclaw://splash-status`). Drives the
-/// splash copy when we're starting our own daemon or hit a problem; the happy
-/// path is covered by the splash's own health polling, so a missed event is
-/// harmless.
-#[derive(Clone, serde::Serialize)]
-struct SplashStatus {
-    /// `starting` | `error` | `missing`.
-    kind: &'static str,
-    message: String,
+/// Record a startup failure in shared state, then show it on the splash. A
+/// splash opened later reads it back through `get_startup_failure`.
+async fn report_startup_failure(
+    app: &tauri::AppHandle,
+    state: &state::SharedState,
+    failure: SplashStatus,
+) {
+    state.write().await.startup_failure = Some(failure.clone());
+    let _ = app.emit("zeroclaw://splash-status", failure);
 }
 
 /// Ensure a gateway/daemon is reachable: reuse one if it already answers,
@@ -59,29 +59,42 @@ async fn ensure_daemon(app: tauri::AppHandle, state: state::SharedState) {
                 },
             );
             if let Err(e) = daemon::spawn_daemon(&bin, GATEWAY_PORT) {
-                let _ = app.emit(
-                    "zeroclaw://splash-status",
+                report_startup_failure(
+                    &app,
+                    &state,
                     SplashStatus {
                         kind: "error",
                         message: format!("Couldn't start the ZeroClaw daemon: {e}"),
                     },
-                );
+                )
+                .await;
             }
             // On success the splash's health poll detects the daemon and
             // calls `open_dashboard`.
         }
         None => {
-            let _ = app.emit(
-                "zeroclaw://splash-status",
+            report_startup_failure(
+                &app,
+                &state,
                 SplashStatus {
                     kind: "missing",
                     message: "Couldn't find the `zeroclaw` binary. Install ZeroClaw \
                               (or start a daemon yourself) and reopen the app."
                         .to_string(),
                 },
-            );
+            )
+            .await;
         }
     }
+}
+
+/// The startup failure, if any, for a splash that opened after it was
+/// reported, such as one reopened from the tray.
+#[tauri::command]
+async fn get_startup_failure(
+    state: tauri::State<'_, state::SharedState>,
+) -> Result<Option<SplashStatus>, String> {
+    Ok(state.read().await.startup_failure.clone())
 }
 
 /// Attempt to auto-pair with the gateway so the WebView has a valid token
@@ -213,6 +226,7 @@ pub fn run() {
             commands::pairing::get_devices,
             commands::agent::send_message,
             open_dashboard,
+            get_startup_failure,
             capabilities::screenshot::take_screenshot,
             capabilities::applescript::run_applescript,
         ])

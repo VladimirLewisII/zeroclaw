@@ -109,7 +109,8 @@ open /Applications/ZeroClaw.app
   app again brings the same window back, restored if it was minimized and
   without reloading the page.
 - Close the splash before the dashboard opens: the same routes reopen the
-  splash, which hands off to the dashboard once the gateway is healthy.
+  splash, which shows any startup error again (such as a missing `zeroclaw`
+  binary) and hands off to the dashboard once the gateway is healthy.
 - **Quit ZeroClaw** in the tray menu ends the app and removes the tray icon. A
   daemon the app started keeps running, and the next launch reuses it.
 - Inspect `<config-dir>/logs/zeroclaw-desktop-daemon.log` after startup to verify combined stdout/stderr capture; the file stays at or below 8 MiB and keeps the newest tail during continuous output.
