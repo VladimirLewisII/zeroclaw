@@ -78,7 +78,7 @@ For `zeroclaw config`, an authorization edit is one that writes or changes
 `[permission_profiles]`, `[users]`, `[oidc]`, or
 `security.trust_daemon_uid`. The CLI counts this configuration's daemon as
 running while its heartbeat file beside `config.toml`
-(`state/daemon_state.json`) is recent and, on Unix, names a live process.
+(`state/daemon_state.json`) is recent and names a live process.
 Without such a heartbeat, the CLI checks the configuration's ownership
 lock, which a daemon takes before it loads its configuration and holds
 while it runs. If another process holds the lock, typically a daemon still
@@ -91,8 +91,10 @@ edit applies when a daemon next starts.
 
 With the daemon running, `config set` and `config patch` first check that
 the endpoint is that daemon's (on Unix, the socket's peer must be this
-account or root, and its process the one the heartbeat names), then hand
-the edit to it as `config/set`, or `config/set-many` for a patch. The
+account or root, and its process the one the heartbeat names; on Windows,
+the process the kernel reports as the pipe's server must be the one the
+heartbeat names and run as this account or SYSTEM), then hand the edit to
+it as `config/set`, or `config/set-many` for a patch. The
 daemon validates and saves the edit, swaps it into its live configuration
 and publishes the policy before the CLI reports it applied. It commits a
 patch that also writes other paths as one batch. A patch the daemon would
@@ -108,10 +110,10 @@ outside the roster, or any caller while the daemon is in the deny-all
 state. This lets the file's owner repair a lockout from the command line
 (see [Recovery](#recovery)). The CLI does the same when the daemon runs
 another release, fails the handshake, or cannot be reached; when the
-endpoint is not this configuration's daemon, or is a named pipe (the CLI
-does not verify a named pipe's server, so on Windows it never sends an
-authorization edit over one); and when the daemon's config methods do not
-take the write (clearing or masking a secret, a patch that creates a
+endpoint is not this configuration's daemon, or a check of which process
+serves its named pipe could not be completed (the CLI then sends nothing);
+and when the daemon's config methods do not take the write (clearing or
+masking a secret, a patch that creates a
 keyed-list row such as `plugins.entries`, a patch of more than 256
 writes). `config init` never commits an authorization entry through the
 daemon, so while the daemon runs it reports every one it writes as
@@ -152,7 +154,7 @@ these codes.
 | `handshake` | The daemon answered, but the handshake failed. |
 | `unreachable` | The heartbeat names a running daemon, but its endpoint could not be reached. |
 | `other_daemon` | The endpoint is not this configuration's daemon, so it was not sent the edit. |
-| `unverified_endpoint` | The endpoint is a Windows named pipe, whose server the CLI does not verify, so it was not sent the edit. |
+| `unverified_endpoint` | A check of which process serves the Windows named pipe could not be completed, so the CLI sent nothing. |
 | `owner_unconfirmed` | No recent heartbeat confirms a daemon, but another process holds the configuration's ownership lock, so the CLI sent nothing. |
 | `not_replayable` | The daemon's config methods do not take this write. |
 | `offline_command` | The command never commits this write through the daemon (`config init`). |
@@ -211,7 +213,10 @@ no trusted local route. A paired gateway token still authenticates as the
 shared operator while the policy compiles, so a client that sends one, over
 WSS or over the pipe, can repair the roster live. zerocode's local pipe
 connection sends no token, so without such a client a lockout is repaired
-by editing `config.toml` and restarting.
+by editing `config.toml` and restarting. `zeroclaw config set` and
+`config patch` send no token either: while no roster exists they verify
+the pipe's server and commit through the daemon; once one exists they are
+refused at the handshake and save the edit as pending.
 
 A client may forward its shell environment in `initialize` so the
 daemon's subprocesses see its `PATH` and credential sockets (see
@@ -252,7 +257,9 @@ trusted shared operator whatever the roster says. Repair the offending
 entry over that local connection, for example in zerocode's config editor,
 with an RPC `config/set` of `users.alice.uid`, or with
 `zeroclaw config set` run as that account, which commits through the
-daemon; the change is compiled and published at save time. Editing
+daemon on Unix (on Windows a roster already refuses the CLI at the
+handshake, so its edit is saved and pending); the change is compiled and
+published at save time. Editing
 `config.toml` by hand also repairs it, but only once the daemon reloads or
 restarts, and so does a `zeroclaw config set` that the CLI reports as
 pending. A roster principal without the config-write grant cannot repair

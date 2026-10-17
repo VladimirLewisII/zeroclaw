@@ -860,26 +860,19 @@ fn patch_batch_is_delegatable(entries: usize, replayable: bool) -> bool {
 #[cfg(feature = "agent-runtime")]
 fn daemon_commit_api_error(err: &anyhow::Error) -> ConfigApiError {
     use config_publication::CommitFailure;
-    #[cfg(unix)]
     use zeroclaw_api::jsonrpc::error_codes::INVALID_PARAMS;
 
     let message = err.to_string();
     match err.downcast_ref::<CommitFailure>() {
-        #[cfg(unix)]
         Some(CommitFailure::Rejected { code, .. }) if *code == i64::from(INVALID_PARAMS) => {
             ConfigApiError::new(ConfigApiCode::ValidationFailed, message)
         }
-        #[cfg(unix)]
-        Some(CommitFailure::Forbidden { .. }) => {
-            ConfigApiError::new(ConfigApiCode::ValidationFailed, message)
-        }
-        Some(CommitFailure::PolicyWouldNotCompile { .. }) => {
+        Some(CommitFailure::Forbidden { .. } | CommitFailure::PolicyWouldNotCompile { .. }) => {
             ConfigApiError::new(ConfigApiCode::ValidationFailed, message)
         }
         Some(CommitFailure::UncheckableTest { path }) => {
             ConfigApiError::new(ConfigApiCode::OpNotSupported, message).with_path(path)
         }
-        #[cfg(unix)]
         Some(CommitFailure::Unknown { path }) => {
             ConfigApiError::new(ConfigApiCode::InternalError, message).with_path(path)
         }
@@ -19206,64 +19199,61 @@ mod tests {
     #[test]
     #[cfg(feature = "agent-runtime")]
     fn config_patch_reports_a_daemon_verdict_with_the_matching_api_error() {
-        #[cfg(unix)]
-        {
-            use zeroclaw_api::jsonrpc::error_codes::{INTERNAL_ERROR, INVALID_PARAMS};
+        use zeroclaw_api::jsonrpc::error_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 
-            let rejected = |code: i32| -> anyhow::Error {
-                config_publication::CommitFailure::Rejected {
-                    message: "users.bob.permission_profiles is required".into(),
-                    code: i64::from(code),
-                    suggest_patch: false,
-                }
-                .into()
-            };
-            let invalid = daemon_commit_api_error(&rejected(INVALID_PARAMS));
-            assert_eq!(invalid.code, ConfigApiCode::ValidationFailed);
-            assert!(
-                invalid
-                    .message
-                    .contains("users.bob.permission_profiles is required"),
-                "{}",
-                invalid.message
-            );
-            assert_eq!(invalid.path, None);
-            assert_eq!(
-                daemon_commit_api_error(&rejected(INTERNAL_ERROR)).code,
-                ConfigApiCode::InternalError,
-                "a rejection for another reason than the edit's validity is internal"
-            );
-
-            let unknown: anyhow::Error = config_publication::CommitFailure::Unknown {
-                path: "users.bob.uid".into(),
+        let rejected = |code: i32| -> anyhow::Error {
+            config_publication::CommitFailure::Rejected {
+                message: "users.bob.permission_profiles is required".into(),
+                code: i64::from(code),
+                suggest_patch: false,
             }
-            .into();
-            let unknown = daemon_commit_api_error(&unknown);
-            assert_eq!(unknown.code, ConfigApiCode::InternalError);
-            assert_eq!(
-                unknown.path.as_deref(),
-                Some("users.bob.uid"),
-                "an unknown outcome names the property to check"
-            );
+            .into()
+        };
+        let invalid = daemon_commit_api_error(&rejected(INVALID_PARAMS));
+        assert_eq!(invalid.code, ConfigApiCode::ValidationFailed);
+        assert!(
+            invalid
+                .message
+                .contains("users.bob.permission_profiles is required"),
+            "{}",
+            invalid.message
+        );
+        assert_eq!(invalid.path, None);
+        assert_eq!(
+            daemon_commit_api_error(&rejected(INTERNAL_ERROR)).code,
+            ConfigApiCode::InternalError,
+            "a rejection for another reason than the edit's validity is internal"
+        );
 
-            let forbidden: anyhow::Error = config_publication::CommitFailure::Forbidden {
-                message: "Principal is not granted config:update".into(),
-            }
-            .into();
-            let forbidden = daemon_commit_api_error(&forbidden);
-            assert_eq!(
-                forbidden.code,
-                ConfigApiCode::ValidationFailed,
-                "a refusal of the bound principal is a verdict on the edit, not a server fault"
-            );
-            assert!(
-                forbidden
-                    .message
-                    .contains("Principal is not granted config:update"),
-                "{}",
-                forbidden.message
-            );
+        let unknown: anyhow::Error = config_publication::CommitFailure::Unknown {
+            path: "users.bob.uid".into(),
         }
+        .into();
+        let unknown = daemon_commit_api_error(&unknown);
+        assert_eq!(unknown.code, ConfigApiCode::InternalError);
+        assert_eq!(
+            unknown.path.as_deref(),
+            Some("users.bob.uid"),
+            "an unknown outcome names the property to check"
+        );
+
+        let forbidden: anyhow::Error = config_publication::CommitFailure::Forbidden {
+            message: "Principal is not granted config:update".into(),
+        }
+        .into();
+        let forbidden = daemon_commit_api_error(&forbidden);
+        assert_eq!(
+            forbidden.code,
+            ConfigApiCode::ValidationFailed,
+            "a refusal of the bound principal is a verdict on the edit, not a server fault"
+        );
+        assert!(
+            forbidden
+                .message
+                .contains("Principal is not granted config:update"),
+            "{}",
+            forbidden.message
+        );
 
         let uncheckable: anyhow::Error = config_publication::CommitFailure::UncheckableTest {
             path: "users.bob.permission_profiles".into(),

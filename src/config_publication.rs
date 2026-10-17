@@ -23,9 +23,9 @@
 //! re-asserts the value already in the file goes to the daemon too: the file
 //! is not what the daemon enforces. When the daemon cannot be reached, is not
 //! the process the heartbeat names, runs another release or refuses this
-//! caller at the handshake, binding no principal, or when the CLI does not
-//! verify which process serves its endpoint on this platform, the CLI saves
-//! the edit locally and reports it as pending until the daemon reloads. A
+//! caller at the handshake, binding no principal, or when a check of which
+//! process serves its named pipe could not be completed, the CLI saves the
+//! edit locally and reports it as pending until the daemon reloads. A
 //! refusal at the handshake is how a daemon enforcing a deny-all policy
 //! answers, and how one answers a caller its roster does not map, so the
 //! local save is what lets an operator repair a lockout. When the daemon
@@ -46,7 +46,6 @@
 use std::cell::OnceCell;
 use std::fmt;
 use std::path::PathBuf;
-#[cfg(unix)]
 use std::time::Duration;
 
 use serde_json::Value;
@@ -55,15 +54,12 @@ use zeroclaw_runtime::rpc::auth::{auth_inputs, is_auth_input_path, validate_acce
 use zeroclaw_runtime::rpc::types::{ConfigSetManyParams, ConfigSetParams};
 
 use crate::config::Config;
-#[cfg(unix)]
 use crate::daemon_rpc::CLI_VERSION;
 use crate::daemon_rpc::{self, DaemonCallError};
 
 /// How long to keep asking a running daemon whose endpoint does not accept
 /// connections.
-#[cfg(unix)]
 const RECONNECT_WINDOW: Duration = Duration::from_secs(3);
-#[cfg(unix)]
 const RECONNECT_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The authorization inputs as they stood before a command staged its edit,
@@ -124,24 +120,19 @@ pub(crate) enum PendingReason {
     /// The daemon refused this caller at the handshake, binding no principal
     /// to it: a caller its roster does not map, or any caller while it
     /// enforces a deny-all policy.
-    #[cfg(unix)]
     Refused,
     /// The daemon runs another release than this CLI.
-    #[cfg(unix)]
     VersionMismatch,
     /// The daemon answered, but the handshake failed.
-    #[cfg(unix)]
     Handshake,
     /// The endpoint of the running daemon could not be reached.
-    #[cfg(unix)]
     Unreachable,
     /// The process serving the endpoint is not the daemon this
     /// configuration's heartbeat names, so it was sent nothing.
-    #[cfg(unix)]
     OtherDaemon,
-    /// The CLI does not verify which process serves the daemon's named pipe,
-    /// so the edit was not sent.
-    #[cfg(not(unix))]
+    /// A check of which process serves the daemon's named pipe could not be
+    /// completed, so the edit was not sent.
+    #[cfg(windows)]
     UnverifiedEndpoint,
     /// No heartbeat confirms a daemon, but another process holds this
     /// configuration's ownership lock, which a daemon takes before it loads
@@ -162,17 +153,12 @@ impl PendingReason {
     /// Stable name for machine-readable output.
     pub(crate) fn code(self) -> &'static str {
         match self {
-            #[cfg(unix)]
             Self::Refused => "refused",
-            #[cfg(unix)]
             Self::VersionMismatch => "version_mismatch",
-            #[cfg(unix)]
             Self::Handshake => "handshake",
-            #[cfg(unix)]
             Self::Unreachable => "unreachable",
-            #[cfg(unix)]
             Self::OtherDaemon => "other_daemon",
-            #[cfg(not(unix))]
+            #[cfg(windows)]
             Self::UnverifiedEndpoint => "unverified_endpoint",
             Self::OwnerUnconfirmed => "owner_unconfirmed",
             Self::OfflineCommand => "offline_command",
@@ -196,14 +182,14 @@ pub(crate) enum Publication {
     /// A daemon runs, or may be starting, but did not take the edit: it could
     /// not be asked, is not this configuration's, refused the caller at the
     /// handshake, or was never asked because the write has no daemon path, no
-    /// heartbeat confirms it, or the CLI does not verify its endpoint on this
-    /// platform. Save locally and report pending reload.
+    /// heartbeat confirms it, or a check of which process serves its named
+    /// pipe could not be completed. Save locally and report pending reload.
     ///
     /// `detail` is the evidence behind `reason`: the daemon's refusal, the
-    /// handshake failure, the identity mismatch or the connect error. For
-    /// `VersionMismatch` it is the daemon's version; for `OwnerUnconfirmed`,
-    /// the ownership lock another process holds; for `OfflineCommand`,
-    /// `NotReplayable` and `UnverifiedEndpoint` it is empty.
+    /// handshake failure, the identity mismatch, the connect error or the
+    /// check that could not be completed. For `VersionMismatch` it is the
+    /// daemon's version; for `OwnerUnconfirmed`, the ownership lock another
+    /// process holds; for `OfflineCommand` and `NotReplayable` it is empty.
     Pending {
         reason: PendingReason,
         detail: String,
@@ -248,40 +234,36 @@ impl Publication {
             )),
             Self::Pending { reason, detail } => {
                 let reason = match reason {
-                    #[cfg(unix)]
                     PendingReason::Refused => crate::ta(
                         "cli-config-auth-reason-refused",
                         &[("detail", detail)],
                         "the daemon refused this caller",
                     ),
-                    #[cfg(unix)]
                     PendingReason::VersionMismatch => crate::ta(
                         "cli-config-auth-reason-version",
                         &[("daemon", detail), ("cli", CLI_VERSION)],
                         "the running daemon is another version; restart the daemon",
                     ),
-                    #[cfg(unix)]
                     PendingReason::Handshake => crate::ta(
                         "cli-config-auth-reason-handshake",
                         &[("detail", detail)],
                         "the daemon handshake failed",
                     ),
-                    #[cfg(unix)]
                     PendingReason::Unreachable => crate::ta(
                         "cli-config-auth-reason-unreachable",
                         &[("detail", detail)],
                         "a daemon may be running, but its endpoint could not be reached",
                     ),
-                    #[cfg(unix)]
                     PendingReason::OtherDaemon => crate::ta(
                         "cli-config-auth-reason-other-daemon",
                         &[("detail", detail)],
                         "the daemon answering at the socket is not the one for this configuration",
                     ),
-                    #[cfg(not(unix))]
-                    PendingReason::UnverifiedEndpoint => crate::t(
+                    #[cfg(windows)]
+                    PendingReason::UnverifiedEndpoint => crate::ta(
                         "cli-config-auth-reason-unverified",
-                        "the CLI does not verify which process serves the daemon's named pipe, so it did not send the edit",
+                        &[("detail", detail)],
+                        "the CLI could not verify which process serves the daemon's named pipe ({$detail}), so it did not send the edit",
                     ),
                     PendingReason::OwnerUnconfirmed => crate::ta(
                         "cli-config-auth-reason-owner-unconfirmed",
@@ -315,7 +297,6 @@ pub(crate) enum CommitFailure {
     /// `code` is the JSON-RPC error code of the verdict (`INVALID_PARAMS` for
     /// an invalid edit). `suggest_patch` is set for a single-field edit, which
     /// may have failed only because it needs another field set with it.
-    #[cfg(unix)]
     Rejected {
         message: String,
         code: i64,
@@ -326,7 +307,6 @@ pub(crate) enum CommitFailure {
     /// was saved. A local save would put an edit the daemon refused this
     /// caller into the file its next reload installs. `message` is the
     /// daemon's reason.
-    #[cfg(unix)]
     Forbidden { message: String },
     /// A daemon runs but the edit is to be saved locally, whether the daemon
     /// did not take it or was never offered it, and saving it would turn a
@@ -336,7 +316,6 @@ pub(crate) enum CommitFailure {
     PolicyWouldNotCompile { error: String, suggest_patch: bool },
     /// The request reached the daemon but no answer came back, so the edit may
     /// or may not have been applied. `path` is a property to check.
-    #[cfg(unix)]
     Unknown { path: String },
     /// A `config patch` batch the running daemon would have committed
     /// carries a `test` op on the authorization input `path`. The op was
@@ -349,7 +328,6 @@ pub(crate) enum CommitFailure {
 impl fmt::Display for CommitFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (text, suggest_patch) = match self {
-            #[cfg(unix)]
             Self::Rejected {
                 message,
                 suggest_patch,
@@ -364,7 +342,6 @@ impl fmt::Display for CommitFailure {
             ),
             // A principal the daemon refused an edit is not helped by
             // setting fields together, so there is no patch hint.
-            #[cfg(unix)]
             Self::Forbidden { message } => {
                 return f.write_str(&crate::ta(
                     "cli-config-auth-forbidden",
@@ -383,7 +360,6 @@ impl fmt::Display for CommitFailure {
                 ),
                 *suggest_patch,
             ),
-            #[cfg(unix)]
             Self::Unknown { path } => {
                 return f.write_str(&crate::ta(
                     "cli-config-auth-unknown",
@@ -630,11 +606,16 @@ fn process_is_alive(pid: u32) -> bool {
     rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-/// Without a cheap existence probe here, a recent heartbeat is the liveness
-/// signal. Pid 0 still names no daemon.
-#[cfg(not(unix))]
+/// Pid 0 is the idle process and names no daemon. A pid the probe shows has
+/// exited is dead; one that exists, or exists under an account this one may
+/// not open, is alive. A probe that fails leaves the heartbeat's own evidence
+/// standing: at worst the edit waits out the reconnect window and is reported
+/// unreachable, never saved as if no daemon ran.
+#[cfg(windows)]
 fn process_is_alive(pid: u32) -> bool {
     pid != 0
+        && !zeroclaw_runtime::control_plane::authority::pid_is_definitely_absent(pid)
+            .unwrap_or(false)
 }
 
 /// Send an edit to the daemon the command found running as `pid`.
@@ -650,7 +631,6 @@ fn process_is_alive(pid: u32) -> bool {
 /// reported pending rather than saved as if no daemon ran. The wait reads
 /// only the heartbeat: the ownership lock was probed, if at all, when the
 /// command first looked for the daemon.
-#[cfg(unix)]
 async fn send(
     config: &Config,
     mut pid: u32,
@@ -676,23 +656,9 @@ async fn send(
     }
 }
 
-/// Send an edit to the daemon the command found running as `pid`. The
-/// daemon client opens nothing on this platform, so there is no endpoint to
-/// wait for.
-#[cfg(not(unix))]
-async fn send(
-    config: &Config,
-    pid: u32,
-    method: &str,
-    params: Value,
-) -> Result<Value, DaemonCallError> {
-    daemon_rpc::call(config, pid, method, params).await
-}
-
 /// Whether a call failed because nothing listens at the endpoint: no socket
-/// there, or one that refuses connections. Any other connect failure leaves
-/// open that the daemon is there and could not be reached.
-#[cfg(unix)]
+/// or pipe there, or a socket that refuses connections. Any other connect
+/// failure leaves open that the daemon is there and could not be reached.
 fn nothing_listening(error: &DaemonCallError) -> bool {
     matches!(
         error,
@@ -734,12 +700,8 @@ async fn commit(
         }
     };
     // The daemon would apply the batch to its live configuration, not to the
-    // copy its `test` ops were checked against. Only the Unix client sends a
-    // running daemon anything; elsewhere the batch is saved to that copy, so
-    // its `test` ops hold as checked.
-    if cfg!(unix)
-        && let Some(path) = uncheckable_test
-    {
+    // copy its `test` ops were checked against.
+    if let Some(path) = uncheckable_test {
         return Err(CommitFailure::UncheckableTest {
             path: path.to_owned(),
         }
@@ -747,32 +709,25 @@ async fn commit(
     }
     let (reason, detail) = match send(config, pid, method, params).await {
         Ok(_) => return Ok(Publication::Applied),
-        #[cfg(not(unix))]
-        Err(DaemonCallError::UnverifiableEndpoint) => {
-            (PendingReason::UnverifiedEndpoint, String::new())
+        #[cfg(windows)]
+        Err(DaemonCallError::UnverifiableEndpoint { detail }) => {
+            (PendingReason::UnverifiedEndpoint, detail)
         }
-        #[cfg(unix)]
         Err(DaemonCallError::Unavailable { path, source }) => (
             PendingReason::Unreachable,
             format!("{}: {source}", path.display()),
         ),
-        #[cfg(unix)]
         Err(DaemonCallError::OtherDaemon { detail }) => (PendingReason::OtherDaemon, detail),
-        #[cfg(unix)]
         Err(DaemonCallError::VersionMismatch { daemon }) => {
             (PendingReason::VersionMismatch, daemon)
         }
-        #[cfg(unix)]
         Err(DaemonCallError::Handshake { detail }) => (PendingReason::Handshake, detail),
         // No principal was bound, which is how a daemon enforcing deny-all
         // answers every caller: the local save is what repairs a lockout.
-        #[cfg(unix)]
         Err(DaemonCallError::HandshakeRefused { message, .. }) => (PendingReason::Refused, message),
-        #[cfg(unix)]
         Err(DaemonCallError::RequestRefused { message, .. }) => {
             return Err(CommitFailure::Forbidden { message }.into());
         }
-        #[cfg(unix)]
         Err(DaemonCallError::Rejected { code, message }) => {
             return Err(CommitFailure::Rejected {
                 message,
@@ -781,7 +736,6 @@ async fn commit(
             }
             .into());
         }
-        #[cfg(unix)]
         Err(DaemonCallError::NoAnswer { detail }) => {
             ::zeroclaw_log::record!(
                 WARN,
@@ -813,7 +767,6 @@ async fn commit(
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
-    #[cfg(unix)]
     use zeroclaw_api::jsonrpc::error_codes::INVALID_PARAMS;
     use zeroclaw_config::schema::{PermissionProfileConfig, UserConfig};
 
@@ -865,6 +818,23 @@ mod tests {
         child.id()
     }
 
+    /// The pid of a process that has already exited, so nothing runs under it.
+    #[cfg(windows)]
+    fn exited_pid() -> u32 {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit 0"])
+            .spawn()
+            .expect("`cmd` is available");
+        child.wait().expect("`cmd` exits");
+        child.id()
+    }
+
+    /// A pid this account may not signal or open, which still names a running
+    /// process: init on Unix, the System process on Windows.
+    fn guarded_pid() -> u32 {
+        if cfg!(windows) { 4 } else { 1 }
+    }
+
     fn with_trust_flipped(config: &Config) -> Config {
         let mut staged = config.clone();
         staged.security.trust_daemon_uid = !staged.security.trust_daemon_uid;
@@ -886,13 +856,40 @@ mod tests {
         staged
     }
 
-    /// `config` with its endpoint at a path too long for a unix socket, so a
-    /// connect fails for another reason than nothing listening there.
+    /// What keeps an endpoint from being connected to: nothing on Unix, where
+    /// the path does it, and the pipe instance that refuses the open on
+    /// Windows.
     #[cfg(unix)]
-    fn with_unconnectable_endpoint(config: &Config) -> Config {
-        let mut staged = config.clone();
-        staged.data_dir = config.data_dir.join("d".repeat(120));
-        staged
+    type Unconnectable = ();
+    #[cfg(windows)]
+    type Unconnectable = tokio::net::windows::named_pipe::NamedPipeServer;
+
+    /// `config` with an endpoint a connect to fails for another reason than
+    /// nothing listening there, and what keeps it that way. On Unix the
+    /// endpoint sits at a path too long for a unix socket. On Windows the pipe
+    /// of a data dir of its own is served by an instance that takes no reads,
+    /// so opening it for reading and writing is refused.
+    fn unconnectable_endpoint(config: &Config) -> (Config, Unconnectable) {
+        #[cfg(unix)]
+        {
+            let mut staged = config.clone();
+            staged.data_dir = config.data_dir.join("d".repeat(120));
+            (staged, ())
+        }
+        #[cfg(windows)]
+        {
+            let mut staged = config.clone();
+            staged.data_dir = config.data_dir.join("unconnectable");
+            let name = zeroclaw_runtime::rpc::local::socket_path(&staged)
+                .to_string_lossy()
+                .into_owned();
+            let server = tokio::net::windows::named_pipe::ServerOptions::new()
+                .access_outbound(false)
+                .first_pipe_instance(true)
+                .create(&name)
+                .unwrap_or_else(|error| panic!("create {name}: {error}"));
+            (staged, server)
+        }
     }
 
     fn assert_would_not_compile(failure: &anyhow::Error, suggest: bool) {
@@ -946,17 +943,12 @@ mod tests {
             Some(serde_json::json!({ "applied": true }))
         );
         for (reason, code) in [
-            #[cfg(unix)]
             (PendingReason::Refused, "refused"),
-            #[cfg(unix)]
             (PendingReason::VersionMismatch, "version_mismatch"),
-            #[cfg(unix)]
             (PendingReason::Handshake, "handshake"),
-            #[cfg(unix)]
             (PendingReason::Unreachable, "unreachable"),
-            #[cfg(unix)]
             (PendingReason::OtherDaemon, "other_daemon"),
-            #[cfg(not(unix))]
+            #[cfg(windows)]
             (PendingReason::UnverifiedEndpoint, "unverified_endpoint"),
             (PendingReason::OwnerUnconfirmed, "owner_unconfirmed"),
             (PendingReason::OfflineCommand, "offline_command"),
@@ -986,33 +978,32 @@ mod tests {
         let applied = Publication::Applied.notice().expect("applied has a notice");
         assert!(!applied.contains("{cli-"), "{applied}");
 
-        #[cfg(unix)]
-        {
-            let version = Publication::Pending {
-                reason: PendingReason::VersionMismatch,
-                detail: "0.0.1".into(),
+        let version = Publication::Pending {
+            reason: PendingReason::VersionMismatch,
+            detail: "0.0.1".into(),
+        }
+        .notice()
+        .expect("pending has a notice");
+        assert!(version.contains("0.0.1"), "{version}");
+        assert!(version.contains(CLI_VERSION), "{version}");
+        assert!(!version.contains("{cli-"), "{version}");
+
+        for reason in [
+            PendingReason::Refused,
+            PendingReason::Handshake,
+            PendingReason::Unreachable,
+            PendingReason::OtherDaemon,
+            #[cfg(windows)]
+            PendingReason::UnverifiedEndpoint,
+        ] {
+            let notice = Publication::Pending {
+                reason,
+                detail: "the daemon's own words".into(),
             }
             .notice()
             .expect("pending has a notice");
-            assert!(version.contains("0.0.1"), "{version}");
-            assert!(version.contains(CLI_VERSION), "{version}");
-            assert!(!version.contains("{cli-"), "{version}");
-
-            for reason in [
-                PendingReason::Refused,
-                PendingReason::Handshake,
-                PendingReason::Unreachable,
-                PendingReason::OtherDaemon,
-            ] {
-                let notice = Publication::Pending {
-                    reason,
-                    detail: "the daemon's own words".into(),
-                }
-                .notice()
-                .expect("pending has a notice");
-                assert!(notice.contains("the daemon's own words"), "{notice}");
-                assert!(!notice.contains("{cli-"), "{notice}");
-            }
+            assert!(notice.contains("the daemon's own words"), "{notice}");
+            assert!(!notice.contains("{cli-"), "{notice}");
         }
         let unconfirmed = Publication::Pending {
             reason: PendingReason::OwnerUnconfirmed,
@@ -1026,12 +1017,7 @@ mod tests {
         );
         assert!(!unconfirmed.contains("{cli-"), "{unconfirmed}");
         let mut local_notices = BTreeSet::new();
-        for reason in [
-            #[cfg(not(unix))]
-            PendingReason::UnverifiedEndpoint,
-            PendingReason::OfflineCommand,
-            PendingReason::NotReplayable,
-        ] {
+        for reason in [PendingReason::OfflineCommand, PendingReason::NotReplayable] {
             let notice = Publication::Pending {
                 reason,
                 detail: String::new(),
@@ -1043,53 +1029,50 @@ mod tests {
         }
         assert_eq!(
             local_notices.len(),
-            if cfg!(unix) { 2 } else { 3 },
+            2,
             "each reason without evidence says why: {local_notices:?}"
         );
     }
 
     #[test]
     fn commit_failures_name_the_reason_and_the_property_to_check() {
-        #[cfg(unix)]
-        {
-            let rejected = |suggest_patch| {
-                CommitFailure::Rejected {
-                    message: "users.alice.permission_profiles is required".into(),
-                    code: i64::from(INVALID_PARAMS),
-                    suggest_patch,
-                }
-                .to_string()
-            };
-            let plain = rejected(false);
-            assert!(
-                plain.contains("users.alice.permission_profiles is required"),
-                "{plain}"
-            );
-            let hinted = rejected(true);
-            assert!(
-                hinted.starts_with(&plain) && hinted.len() > plain.len(),
-                "a single-field edit adds the patch hint: {hinted}"
-            );
-            assert!(!hinted.contains("{cli-"), "{hinted}");
-
-            let unknown = CommitFailure::Unknown {
-                path: "users.alice.uid".into(),
+        let rejected = |suggest_patch| {
+            CommitFailure::Rejected {
+                message: "users.alice.permission_profiles is required".into(),
+                code: i64::from(INVALID_PARAMS),
+                suggest_patch,
             }
-            .to_string();
-            assert!(unknown.contains("users.alice.uid"), "{unknown}");
-            assert!(!unknown.contains("{cli-"), "{unknown}");
+            .to_string()
+        };
+        let plain = rejected(false);
+        assert!(
+            plain.contains("users.alice.permission_profiles is required"),
+            "{plain}"
+        );
+        let hinted = rejected(true);
+        assert!(
+            hinted.starts_with(&plain) && hinted.len() > plain.len(),
+            "a single-field edit adds the patch hint: {hinted}"
+        );
+        assert!(!hinted.contains("{cli-"), "{hinted}");
 
-            let forbidden = CommitFailure::Forbidden {
-                message: "Principal is not granted config:update".into(),
-            }
-            .to_string();
-            assert!(
-                forbidden.contains("Principal is not granted config:update")
-                    && forbidden.contains("nothing was saved"),
-                "{forbidden}"
-            );
-            assert!(!forbidden.contains("{cli-"), "{forbidden}");
+        let unknown = CommitFailure::Unknown {
+            path: "users.alice.uid".into(),
         }
+        .to_string();
+        assert!(unknown.contains("users.alice.uid"), "{unknown}");
+        assert!(!unknown.contains("{cli-"), "{unknown}");
+
+        let forbidden = CommitFailure::Forbidden {
+            message: "Principal is not granted config:update".into(),
+        }
+        .to_string();
+        assert!(
+            forbidden.contains("Principal is not granted config:update")
+                && forbidden.contains("nothing was saved"),
+            "{forbidden}"
+        );
+        assert!(!forbidden.contains("{cli-"), "{forbidden}");
 
         let uncheckable = CommitFailure::UncheckableTest {
             path: "users.alice.uid".into(),
@@ -1168,21 +1151,18 @@ mod tests {
             "a stamp slightly ahead of this clock is still recent"
         );
 
-        #[cfg(unix)]
-        {
-            write_heartbeat_of(&config, now, exited_pid());
-            assert_eq!(
-                running_daemon(&config),
-                None,
-                "a fresh stamp left behind by a process that exited"
-            );
-            write_heartbeat_of(&config, now, 1);
-            assert_eq!(
-                running_daemon(&config),
-                Some(1),
-                "a process this account may not signal still counts as running"
-            );
-        }
+        write_heartbeat_of(&config, now, exited_pid());
+        assert_eq!(
+            running_daemon(&config),
+            None,
+            "a fresh stamp left behind by a process that exited"
+        );
+        write_heartbeat_of(&config, now, guarded_pid());
+        assert_eq!(
+            running_daemon(&config),
+            Some(guarded_pid()),
+            "a process this account may not inspect still counts as running"
+        );
         write_heartbeat_of(&config, now, 0);
         assert_eq!(
             running_daemon(&config),
@@ -1500,9 +1480,22 @@ mod tests {
         listener
     }
 
+    /// Serve `config`'s pipe with one pending instance, so a test can tell
+    /// whether anything opened it.
+    #[cfg(windows)]
+    fn listen_at_the_endpoint(config: &Config) -> tokio::net::windows::named_pipe::NamedPipeServer {
+        let name = zeroclaw_runtime::rpc::local::socket_path(config)
+            .to_string_lossy()
+            .into_owned();
+        tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&name)
+            .unwrap_or_else(|error| panic!("create {name}: {error}"))
+    }
+
     /// A connection the CLI made would wait in the accept queue.
     #[cfg(unix)]
-    fn assert_nothing_connected(listener: &std::os::unix::net::UnixListener) {
+    async fn assert_nothing_connected(listener: &std::os::unix::net::UnixListener) {
         match listener.accept() {
             Err(error) => assert_eq!(
                 error.kind(),
@@ -1511,6 +1504,18 @@ mod tests {
             ),
             Ok((_, peer)) => panic!("something connected to the endpoint: {peer:?}"),
         }
+    }
+
+    /// A client that opened the pipe, even one that closed it again, would
+    /// complete the pending instance's connect.
+    #[cfg(windows)]
+    async fn assert_nothing_connected(listener: &tokio::net::windows::named_pipe::NamedPipeServer) {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.connect())
+                .await
+                .is_err(),
+            "something opened the endpoint"
+        );
     }
 
     /// With no heartbeat, the ownership lock is probed and released: a free
@@ -1564,7 +1569,6 @@ mod tests {
         let before = AuthSnapshot::capture(&config).expect("encodes");
         let owner =
             ConfigOwnershipGuard::acquire(&config.data_dir).expect("the test takes the lock");
-        #[cfg(unix)]
         let listener = listen_at_the_endpoint(&config);
         let staged = with_trust_flipped(&config);
         let value = staged.security.trust_daemon_uid.to_string();
@@ -1633,8 +1637,7 @@ mod tests {
             .expect_err("a policy that stops compiling is refused");
         assert_would_not_compile(&failure, true);
 
-        #[cfg(unix)]
-        assert_nothing_connected(&listener);
+        assert_nothing_connected(&listener).await;
         drop(owner);
     }
 
@@ -1696,7 +1699,6 @@ mod tests {
     /// daemon's live configuration, so a `test` op the CLI checked on its own
     /// copy of an authorization input fails the batch before the daemon is
     /// contacted. A `test` op elsewhere does not stop the batch.
-    #[cfg(unix)]
     #[tokio::test]
     async fn a_batch_testing_an_authorization_input_is_not_sent_to_a_running_daemon() {
         let (_dir, config) = scratch_config();
@@ -1727,11 +1729,11 @@ mod tests {
             }
             other => panic!("expected UncheckableTest, got {other:?}"),
         }
-        assert_nothing_connected(&listener);
+        assert_nothing_connected(&listener).await;
 
         // An endpoint that fails at once shows the batch was offered to the
         // daemon when its only `test` op is outside the authorization inputs.
-        let unconnectable = with_unconnectable_endpoint(&config);
+        let (unconnectable, _endpoint) = unconnectable_endpoint(&config);
         record_running_daemon(&unconnectable);
         let staged = with_trust_flipped(&unconnectable);
         let publication =
@@ -1753,11 +1755,13 @@ mod tests {
     /// A connect failure other than nothing listening, while a daemon runs,
     /// leaves open that the daemon is there, so the edit is pending rather
     /// than unremarked, and only if it does not break a policy that compiles.
-    #[cfg(unix)]
     #[tokio::test]
     async fn an_endpoint_that_fails_otherwise_is_unreachable_not_absent() {
         let (_dir, config) = scratch_config();
-        let config = with_unconnectable_endpoint(&config);
+        let (config, _endpoint) = unconnectable_endpoint(&config);
+        let endpoint = zeroclaw_runtime::rpc::local::socket_path(&config)
+            .display()
+            .to_string();
         let before = AuthSnapshot::capture(&config).expect("encodes");
         record_running_daemon(&config);
 
@@ -1777,7 +1781,7 @@ mod tests {
             Publication::Pending {
                 reason: PendingReason::Unreachable,
                 detail,
-            } => assert!(detail.contains("daemon.sock"), "{detail}"),
+            } => assert!(detail.contains(&endpoint), "{detail}"),
             other => panic!("expected Pending(Unreachable), got {other:?}"),
         }
 
@@ -1798,7 +1802,6 @@ mod tests {
     /// restarting, and its successor may load the file before the edit
     /// reaches it: the edit is left pending as unreachable, never saved as if
     /// no daemon ran.
-    #[cfg(unix)]
     #[tokio::test]
     async fn a_daemon_whose_heartbeat_disappears_while_asked_leaves_the_edit_unreachable() {
         let (_dir, config) = scratch_config();
@@ -1839,11 +1842,10 @@ mod tests {
     /// refuses every caller, so each repair is saved locally; an endpoint
     /// that cannot be reached stands in for that refusal here. A step that
     /// still leaves the policy uncompiled is saved like the last one.
-    #[cfg(unix)]
     #[tokio::test]
     async fn a_policy_that_did_not_compile_can_be_repaired_one_field_at_a_time() {
         let (_dir, config) = scratch_config();
-        let broken = with_unconnectable_endpoint(&with_profileless_user(&config));
+        let (broken, _endpoint) = unconnectable_endpoint(&with_profileless_user(&config));
         let before = AuthSnapshot::capture(&broken).expect("encodes");
         record_running_daemon(&broken);
 
@@ -1871,15 +1873,16 @@ mod tests {
         );
     }
 
-    /// Here the CLI does not verify which process serves the daemon's named
-    /// pipe, so a running daemon is sent nothing: the edit is saved locally
-    /// and pending, unless it would break a policy that compiles.
-    #[cfg(not(unix))]
+    /// The daemon's own listener runs in this process, which the kernel names
+    /// as the pipe's server, so a daemon recorded as this process takes the
+    /// edit over its pipe.
+    #[cfg(windows)]
     #[tokio::test]
-    async fn a_running_daemon_is_sent_nothing_on_this_platform() {
+    async fn a_running_daemon_takes_the_edit_over_its_pipe() {
         let (_dir, config) = scratch_config();
         let before = AuthSnapshot::capture(&config).expect("encodes");
         record_running_daemon(&config);
+        let _daemon = crate::daemon_rpc::support::serve(&config).await;
 
         let staged = with_trust_flipped(&config);
         let value = staged.security.trust_daemon_uid.to_string();
@@ -1894,48 +1897,75 @@ mod tests {
         .await
         .expect("classifies");
         assert!(
-            matches!(
-                publication,
-                Publication::Pending {
-                    reason: PendingReason::UnverifiedEndpoint,
-                    ref detail,
-                } if detail.is_empty()
-            ),
+            matches!(publication, Publication::Applied),
             "{publication:?}"
         );
+        assert!(
+            config.config_path.exists(),
+            "the daemon saved the edit it applied"
+        );
+    }
 
-        // The batch is saved to the copy its `test` op was checked against,
-        // so the op keeps its meaning.
-        let publication = commit_set_many(
+    /// The heartbeat names a live process that is not the one serving the
+    /// pipe, so the server is another daemon's and is sent nothing, not even
+    /// the handshake: the edit is saved locally and pending.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_pipe_served_by_another_process_leaves_the_edit_pending_as_other_daemon() {
+        use tokio::io::AsyncReadExt;
+
+        let (_dir, config) = scratch_config();
+        let before = AuthSnapshot::capture(&config).expect("encodes");
+        let mut bystander = std::process::Command::new("cmd")
+            .args(["/C", "ping -n 30 127.0.0.1 >NUL"])
+            .spawn()
+            .expect("spawn a long-lived process");
+        write_heartbeat_of(&config, chrono::Utc::now(), bystander.id());
+        let mut server = listen_at_the_endpoint(&config);
+
+        let staged = with_trust_flipped(&config);
+        let value = staged.security.trust_daemon_uid.to_string();
+        let publication = commit_set(
             &before,
             &staged,
-            &[("security.trust_daemon_uid".to_owned(), value)],
-            &["users.me.permission_profiles".to_owned()],
-            false,
-        )
-        .await
-        .expect("classifies");
-        assert!(
-            matches!(
-                publication,
-                Publication::Pending {
-                    reason: PendingReason::UnverifiedEndpoint,
-                    ..
-                }
-            ),
-            "{publication:?}"
-        );
-
-        let failure = commit_set(
-            &before,
-            &with_profileless_user(&config),
-            "users.bob.uid",
-            "4242",
+            "security.trust_daemon_uid",
+            &value,
             None,
             false,
         )
-        .await
-        .expect_err("a policy that stops compiling is refused");
-        assert_would_not_compile(&failure, true);
+        .await;
+        bystander.kill().expect("terminate the process");
+        bystander.wait().expect("reap the process");
+        match publication.expect("classifies") {
+            Publication::Pending {
+                reason: PendingReason::OtherDaemon,
+                detail,
+            } => {
+                assert!(
+                    detail.contains(&format!("server as pid {}", std::process::id())),
+                    "{detail}"
+                );
+            }
+            other => panic!("expected Pending(OtherDaemon), got {other:?}"),
+        }
+
+        // The CLI opened the pipe to ask the kernel who serves it, then hung
+        // up without writing a byte. An instance whose client left before it
+        // looked reports ERROR_NO_DATA instead of connecting.
+        match tokio::time::timeout(Duration::from_secs(1), server.connect()).await {
+            Err(elapsed) => panic!("the CLI never opened the pipe: {elapsed}"),
+            Ok(Err(error)) if error.raw_os_error() == Some(232) => return,
+            Ok(Err(error)) => panic!("the pending instance did not connect: {error}"),
+            Ok(Ok(())) => {}
+        }
+        let mut bytes = Vec::new();
+        match tokio::time::timeout(Duration::from_secs(1), server.read_to_end(&mut bytes)).await {
+            Ok(_) => assert!(
+                bytes.is_empty(),
+                "{} byte(s) were sent to another daemon's pipe",
+                bytes.len()
+            ),
+            Err(elapsed) => panic!("the CLI kept the pipe open: {elapsed}"),
+        }
     }
 }
