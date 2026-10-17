@@ -155,67 +155,17 @@ mod win32 {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
-    use crate::rpc::context::RpcContext;
-    use crate::rpc::local::{connect_client, run_local_listener, socket_path};
-    use crate::rpc::session::SessionStore;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicUsize;
-    use std::time::Duration;
-    use zeroclaw_config::schema::Config;
-    use zeroclaw_infra::session_queue::SessionActorQueue;
-
-    /// A config whose pipe is named after a fresh directory.
-    fn scratch_config() -> (tempfile::TempDir, Config) {
-        assert!(
-            std::env::var_os("ZEROCLAW_SOCKET").is_none(),
-            "ZEROCLAW_SOCKET redirects the endpoint away from these fixtures; unset it"
-        );
-        let dir = tempfile::tempdir().expect("a scratch directory");
-        let config = Config {
-            data_dir: dir.path().to_path_buf(),
-            config_path: dir.path().join("config.toml"),
-            ..Config::default()
-        };
-        (dir, config)
-    }
-
-    /// Serve `config`'s pipe with the daemon's own listener until the guard
-    /// drops. The listener runs in this process, which therefore creates every
-    /// server instance.
-    async fn serve(config: &Config) -> tokio_util::sync::DropGuard {
-        let queue = Arc::new(SessionActorQueue::new(4, 10, 60));
-        let sessions = Arc::new(SessionStore::new(16, queue));
-        let ctx = RpcContext::minimal(config.clone(), sessions);
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let (ready_tx, mut ready_rx) = tokio::sync::watch::channel(false);
-        let readiness = crate::daemon::SocketReadinessReporter::new(move || {
-            let _ = ready_tx.send(true);
-        });
-        let listener_cancel = cancel.clone();
-        zeroclaw_spawn::spawn!(async move {
-            run_local_listener(
-                ctx,
-                listener_cancel,
-                Arc::new(AtomicUsize::new(0)),
-                Some(readiness),
-            )
-            .await
-        });
-        tokio::time::timeout(Duration::from_secs(5), ready_rx.wait_for(|ready| *ready))
-            .await
-            .expect("the listener binds within 5s")
-            .expect("the listener binds its pipe");
-        cancel.drop_guard()
-    }
+    use tokio::net::windows::named_pipe::{ClientOptions, ServerOptions};
 
     #[tokio::test]
     async fn the_server_of_a_pipe_this_process_serves_is_this_process() {
-        let (_dir, config) = scratch_config();
-        let _listener = serve(&config).await;
+        let name = format!(r"\\.\pipe\zeroclaw-config-{}", std::process::id());
+        let _server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&name)
+            .expect("create the pipe");
 
-        let client = connect_client(&socket_path(&config))
-            .await
-            .expect("the pipe is served");
+        let client = ClientOptions::new().open(&name).expect("open the pipe");
         assert_eq!(
             server_process_id(&client).expect("the kernel names the server"),
             std::process::id()
@@ -243,17 +193,5 @@ mod tests {
             account.expect("the child's token is readable"),
             ProcessAccount::ThisUser
         );
-    }
-
-    #[tokio::test]
-    async fn a_missing_pipe_is_not_found() {
-        let name = format!(
-            r"\\.\pipe\zeroclaw-nobody-serves-this-{}",
-            std::process::id()
-        );
-        let error = connect_client(std::path::Path::new(&name))
-            .await
-            .expect_err("nobody serves the pipe");
-        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
 }

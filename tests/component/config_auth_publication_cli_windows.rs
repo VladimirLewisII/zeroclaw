@@ -19,15 +19,17 @@
 //! daemon and the CLI alike, so no test depends on how the default name is
 //! derived.
 
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
+use tokio::net::windows::named_pipe::{
+    ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+};
 use zeroclaw_api::jsonrpc::error_codes::AUTH_REQUIRED;
 use zeroclaw_runtime::rpc::dispatch::RPC_PROTOCOL_VERSION;
 
@@ -36,7 +38,11 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bound on one CLI run, so a CLI that blocks on the daemon fails the test
 /// instead of hanging it.
 const CLI_TIMEOUT: Duration = Duration::from_secs(60);
-/// Bound on waiting for a pipe the test serves to be opened.
+/// Bound on each request a probe makes, so a daemon that stops answering
+/// fails the test instead of hanging it.
+const RPC_TIMEOUT: Duration = Duration::from_secs(15);
+/// Bound on opening a pipe, and on waiting for a pipe the test serves to be
+/// opened.
 const OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 /// `ERROR_PIPE_BUSY`: every instance is connected and the server has not yet
 /// created the next one.
@@ -346,73 +352,96 @@ fn health_ok(port: u16) -> bool {
 }
 
 /// A raw JSON-RPC 2.0 client on the daemon's pipe, one newline-delimited
-/// frame per message. The connection stays open for the probe's lifetime, so
-/// a test can observe how an established binding behaves after the policy
-/// changes underneath it.
+/// frame per message, every exchange bounded by `RPC_TIMEOUT`. The connection
+/// stays open for the probe's lifetime, so a test can observe how an
+/// established binding behaves after the policy changes underneath it.
 struct RpcProbe {
-    reader: BufReader<File>,
-    writer: File,
+    runtime: tokio::runtime::Runtime,
+    reader: BufReader<ReadHalf<NamedPipeClient>>,
+    writer: WriteHalf<NamedPipeClient>,
     next_id: u64,
 }
 
 impl RpcProbe {
     /// Open the pipe, waiting out a server that is between instances.
     fn connect(pipe: &Path) -> std::io::Result<Self> {
-        let deadline = Instant::now() + OPEN_TIMEOUT;
-        let stream = loop {
-            match File::options().read(true).write(true).open(pipe) {
-                Ok(file) => break file,
-                Err(error)
-                    if error.raw_os_error() == Some(ERROR_PIPE_BUSY)
-                        && Instant::now() < deadline =>
-                {
-                    std::thread::sleep(Duration::from_millis(20));
+        let runtime = runtime();
+        let name = pipe.to_string_lossy().into_owned();
+        let client = runtime.block_on(async {
+            let deadline = Instant::now() + OPEN_TIMEOUT;
+            loop {
+                match ClientOptions::new().open(&name) {
+                    Ok(client) => return Ok(client),
+                    Err(error)
+                        if error.raw_os_error() == Some(ERROR_PIPE_BUSY)
+                            && Instant::now() < deadline =>
+                    {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    Err(error) => return Err(error),
                 }
-                Err(error) => return Err(error),
             }
-        };
+        })?;
+        let (reader, writer) = tokio::io::split(client);
         Ok(Self {
-            writer: stream.try_clone()?,
-            reader: BufReader::new(stream),
+            runtime,
+            reader: BufReader::new(reader),
+            writer,
             next_id: 1,
         })
     }
 
     /// Send one request and return its `result` (`Ok`) or its `error` object
     /// (`Err`). Frames with any other id, such as notifications, are skipped.
+    /// A daemon that does not answer within `RPC_TIMEOUT` fails the test.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, Value> {
         let id = self.next_id;
         self.next_id += 1;
         let mut frame =
             json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string();
         frame.push('\n');
-        self.writer
-            .write_all(frame.as_bytes())
-            .unwrap_or_else(|error| panic!("send {method}: {error}"));
-        loop {
-            let mut line = String::new();
-            let read = self
-                .reader
-                .read_line(&mut line)
-                .unwrap_or_else(|error| panic!("read the {method} response: {error}"));
-            assert!(
-                read > 0,
-                "the daemon closed the connection instead of answering {method}"
-            );
-            if line.trim().is_empty() {
-                continue;
+        let Self {
+            runtime,
+            reader,
+            writer,
+            ..
+        } = self;
+        let exchange = async {
+            writer
+                .write_all(frame.as_bytes())
+                .await
+                .unwrap_or_else(|error| panic!("send {method}: {error}"));
+            loop {
+                let mut line = String::new();
+                let read = reader
+                    .read_line(&mut line)
+                    .await
+                    .unwrap_or_else(|error| panic!("read the {method} response: {error}"));
+                assert!(
+                    read > 0,
+                    "the daemon closed the connection instead of answering {method}"
+                );
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let reply: Value = serde_json::from_str(&line).unwrap_or_else(|error| {
+                    panic!("undecodable frame while awaiting {method}: {error}: {line}")
+                });
+                if reply.get("id").and_then(Value::as_u64) != Some(id) {
+                    continue;
+                }
+                return match reply.get("error") {
+                    Some(error) => Err(error.clone()),
+                    None => Ok(reply.get("result").cloned().unwrap_or(Value::Null)),
+                };
             }
-            let reply: Value = serde_json::from_str(&line).unwrap_or_else(|error| {
-                panic!("undecodable frame while awaiting {method}: {error}: {line}")
-            });
-            if reply.get("id").and_then(Value::as_u64) != Some(id) {
-                continue;
-            }
-            return match reply.get("error") {
-                Some(error) => Err(error.clone()),
-                None => Ok(reply.get("result").cloned().unwrap_or(Value::Null)),
-            };
-        }
+        };
+        // The deadline is created inside the runtime, which owns the timer.
+        runtime
+            .block_on(async { tokio::time::timeout(RPC_TIMEOUT, exchange).await })
+            .unwrap_or_else(|elapsed| {
+                panic!("the daemon did not answer {method} within {RPC_TIMEOUT:?}: {elapsed}")
+            })
     }
 
     fn initialize(&mut self) -> Result<Value, Value> {

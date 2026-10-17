@@ -364,7 +364,7 @@ fn other_daemon(endpoint: &Path, mismatch: String) -> DaemonCallError {
 /// queries that feed it so it can be checked on every platform.
 #[cfg(any(windows, test))]
 mod pipe {
-    use zeroclaw_runtime::rpc::pipe_server::ProcessAccount;
+    use zeroclaw_config::platform::pipe_server::ProcessAccount;
 
     /// Why a pipe's server was sent nothing.
     #[derive(Debug, PartialEq, Eq)]
@@ -794,7 +794,7 @@ mod unix {
 #[cfg(windows)]
 mod windows {
     use serde_json::Value;
-    use zeroclaw_runtime::rpc::pipe_server::{process_account, server_process_id};
+    use zeroclaw_config::platform::pipe_server::{process_account, server_process_id};
 
     use super::{DaemonCallError, ServerPeer, exchange, other_daemon, pipe};
     use crate::config::Config;

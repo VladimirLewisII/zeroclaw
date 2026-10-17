@@ -1495,7 +1495,7 @@ mod tests {
 
     /// A connection the CLI made would wait in the accept queue.
     #[cfg(unix)]
-    async fn assert_nothing_connected(listener: &std::os::unix::net::UnixListener) {
+    fn assert_nothing_connected(listener: &std::os::unix::net::UnixListener) {
         match listener.accept() {
             Err(error) => assert_eq!(
                 error.kind(),
@@ -1637,6 +1637,9 @@ mod tests {
             .expect_err("a policy that stops compiling is refused");
         assert_would_not_compile(&failure, true);
 
+        #[cfg(unix)]
+        assert_nothing_connected(&listener);
+        #[cfg(windows)]
         assert_nothing_connected(&listener).await;
         drop(owner);
     }
@@ -1729,6 +1732,9 @@ mod tests {
             }
             other => panic!("expected UncheckableTest, got {other:?}"),
         }
+        #[cfg(unix)]
+        assert_nothing_connected(&listener);
+        #[cfg(windows)]
         assert_nothing_connected(&listener).await;
 
         // An endpoint that fails at once shows the batch was offered to the

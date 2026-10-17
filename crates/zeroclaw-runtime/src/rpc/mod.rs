@@ -9,7 +9,6 @@ pub mod fs;
 pub mod git;
 pub mod local;
 pub mod locales;
-pub mod pipe_server;
 pub mod session;
 pub mod subscription;
 pub mod transport;

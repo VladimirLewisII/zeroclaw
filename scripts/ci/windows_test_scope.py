@@ -465,7 +465,7 @@ def select_required_jobs(
             path
             in {
                 "crates/zeroclaw-runtime/src/lib.rs",
-                "crates/zeroclaw-runtime/src/rpc/pipe_server.rs",
+                "crates/zeroclaw-config/src/platform/pipe_server.rs",
             }
             or path.startswith("crates/zeroclaw-runtime/src/control_plane/")
             for path in changed_paths
