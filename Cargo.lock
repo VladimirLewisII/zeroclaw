@@ -13786,6 +13786,7 @@ dependencies = [
  "rustls",
  "schemars 1.2.2",
  "scopeguard",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -14242,6 +14243,13 @@ dependencies = [
  "zeroclaw-log",
  "zeroclaw-providers",
  "zeroclaw-spawn",
+]
+
+[[package]]
+name = "zeroclaw-memory-plugin-fixture"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.51.0",
 ]
 
 [[package]]
