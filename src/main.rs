@@ -865,6 +865,7 @@ fn print_no_command_help(cmd: clap::Command) -> Result<()> {
 /// Only Windows needs this: there, the kernel does it through a kill-on-close
 /// job object. A host that refuses the job leaves the process unconfined, as
 /// before, with a warning.
+#[cfg(any(feature = "agent-runtime", feature = "gateway"))]
 fn own_process_tree() {
     #[cfg(windows)]
     if let Err(error) = zeroclaw_config::platform::job_object::confine_process_tree() {
